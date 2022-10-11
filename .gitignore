@@ -5,3 +5,10 @@ x64
 x86
 
 .vs
+
+*.sln
+*.vcxproj*
+*.pdb
+*.obj
+*.ilk
+*.exe
