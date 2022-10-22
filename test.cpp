@@ -3,21 +3,24 @@
 #include "CAE.hpp"
 
 void test_cae(int* p) {
-   cae::cae([p]() {
-      printf("Trying to get value of pointer 0x%p\n", p);
+   try {
+      cae_scope;
+
+      printf("Trying to get value of pointer 0x%X\n", p);
       int v = *p;
       printf("Value: %i\n", v);
 
-      printf("Deleting 0x%p\n", p);
+      printf("Deleting 0x%X\n", p);
       delete p;
-   }).except<cae::ExceptionAccessViolation>(
-      [p](cae::ExceptionAccessViolation& e) {
-         printf("Pointer 0x%p was invalid!\n", p);
-         printf("Trying with new int...\n");
-         test_cae(new int);
-      }
-   );
-   printf("Try for pointer 0x%p ended\n", p);
+   } catch(cae::ExceptionAccessViolation& e) {
+      (void)e;
+
+      printf("Pointer 0x%X was invalid!\n", p);
+      printf("Trying with new int...\n");
+      test_cae(new int);
+   }
+
+   printf("Try for pointer 0x%X ended\n", p);
 }
 
 int main() {

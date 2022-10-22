@@ -12,3 +12,6 @@ x86
 *.obj
 *.ilk
 *.exe
+*.o
+CAE_test
+CAE_test*
