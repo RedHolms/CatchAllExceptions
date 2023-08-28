@@ -1,34 +1,34 @@
 #pragma once
 #define CAE_included
 
-#include <stddef.h>
+#include <stdint.h>
 
 #include <string>
-#include <exception>
-#include <ostream>
-#include <vector>
 #include <sstream>
+#include <exception>
 #include <functional>
-#include <typeinfo>
 
+// Base exception class
 class system_exception : public std::exception {
 public:
   static constexpr uint32_t id = -1;
 
 public:
-  system_exception(uintptr_t address, uint32_t exception_code, uint32_t id)
+  system_exception(uintptr_t address, uint32_t exception_code, uint32_t id = system_exception::id)
     : m_address(address), m_exception_code(exception_code), m_id(id) {}
 
   inline uintptr_t get_address() const { return m_address; }
   inline uint32_t get_exception_code() const { return m_exception_code; }
   inline uint32_t get_id() const { return m_id; }
 
+  // Convert exception object to string
   inline std::string to_string() const {
     std::stringstream ss;
     write_to(ss);
     return ss.str();
   }
 
+  // Write exception object to output string stream
   virtual std::basic_ostream<char>& write_to(std::basic_ostream<char>& os) const {
     os << "system_exception";
     os << " at 0x" << std::hex << m_address;
@@ -46,24 +46,17 @@ private:
 
 namespace CAE {
 
-  class context;
-
-  void ProtectedCall(context& ctx);
-
+  // cae_try/cae_catch/cae_else/cae_finally context
   class context {
-    friend void ProtectedCall(context&);
-
-    struct exception_handler_description {
-      using handler_type = void(system_exception&);
-      using handler_function_type = std::function<handler_type>;
-
+    struct exception_catcher {
       template <typename T>
-      inline exception_handler_description(std::function<void(T&)> const& handler)
+      inline exception_catcher(std::function<void(T&)> const& handler)
         : exception_type_id(T::id),
         handler(
           [handler](system_exception& ex) {
-            if (handler)
+            if (handler) {
               handler(dynamic_cast<T&>(ex));
+            }
           }
         )
       {
@@ -71,7 +64,7 @@ namespace CAE {
       }
 
       uint32_t exception_type_id;
-      handler_function_type handler;
+      std::function<void(system_exception&)> handler;
     };
 
   public:
@@ -79,13 +72,13 @@ namespace CAE {
       : m_worker(worker) {}
 
     inline ~context() {
-      ProtectedCall(*this);
+      invoke();
     }
 
   public:
     template <typename T>
     inline context& add_catch(std::function<void(T&)> const& handler) {
-      m_exceptions_handlers.emplace_back(handler);
+      m_exceptions_catchers.emplace_back(handler);
       return *this;
     }
 
@@ -99,17 +92,20 @@ namespace CAE {
       return *this;
     }
 
+    // Invoke context worker in protected enviroment
+    void invoke();
+
   private:
     std::function<void()> m_worker;
-    std::vector<exception_handler_description> m_exceptions_handlers;
+    std::vector<exception_catcher> m_exceptions_catchers;
     std::function<void()> m_finally;
     std::function<void()> m_else;
   };
 
-}
+} // namespace CAE
 
 #define cae_try CAE::context([&]()
-#define cae_catch(type, ex) ).add_catch<type>([&](type& ex)
+#define cae_catch(expr) ).add_catch( (std::function<void(expr)>) [&](expr)
 #define cae_finally ).add_finally([&]()
 #define cae_else ).add_else([&]()
 #define cae_end );
@@ -158,7 +154,7 @@ public:
   }
   inline uintptr_t get_accessed_address() const { return m_accessed_address; }
 
-  virtual std::basic_ostream<char>& write_to(std::basic_ostream<char>& os) const {
+  std::basic_ostream<char>& write_to(std::basic_ostream<char>& os) const {
     os << "access_violation";
     os << " at 0x" << std::hex << get_address();
     os << ": ";
@@ -168,9 +164,46 @@ public:
     return os;
   }
 
-  virtual const char* what() const { return "access violation"; }
+  const char* what() const { return "access violation"; }
 
 private:
   memory_operation m_operation;
   uintptr_t m_accessed_address;
 };
+
+
+// Internal stuff
+extern "C" {
+
+  struct CAE_ProtectedCallContext {
+    uintptr_t         stack_pointer;      // ESP/RSP register
+    uintptr_t         exception_catcher;  // Where we should jump, when exception is thrown
+    system_exception* thrown_exception;   // Pointer to thrown exception. Can be nullptr, if no exception thrown
+  };
+
+  // Defined in assembler
+  // Throws given exception. Exception must be allocated (with `new` operator)
+  // There's must be protected call context at stack (must be used inside of `CAE_PerformProtectedCall`)
+  __declspec(noreturn) void __cdecl CAE_Throw(system_exception* exception);
+
+  // Defined in assembler
+  // Calls given worker in protected call context.
+  // If exception was thrown, returns pointer to it. You must delete exception after use
+  system_exception* __cdecl CAE_PerformProtectedCall(std::function<void()> const& worker);
+
+  // Used by assembly to call std::function
+  void __cdecl CAE_CallStdFunction(std::function<void()> const& function);
+
+  // Used by assembly
+  // Push new protected call context to stack, and return pointer to it
+  CAE_ProtectedCallContext* __cdecl CAE_PushProtectedCallContext();
+
+  // Used by assembly
+  // Returns protected call context at the top of stack
+  CAE_ProtectedCallContext* __cdecl CAE_GetProtectedCallContext();
+
+  // Used by assembly
+  // Pop protected call context from stack
+  void __cdecl CAE_PopProtectedCallContext();
+
+} // extern "C"
